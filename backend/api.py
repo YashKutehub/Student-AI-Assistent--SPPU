@@ -13,7 +13,8 @@ from passlib.context import CryptContext
 # Import your AI logic
 from backend import ask_gemini_multimodal, DB_PERSIST_DIRECTORY
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+# UPDATED: Using Google Embeddings to match ingest.py
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # --- SETUP ---
 app = FastAPI()
@@ -25,16 +26,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Setup
+# Database Setup (SQLite for User Auth)
 SQLALCHEMY_DATABASE_URL = "sqlite:///./student_assistant.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Vector DB Setup
-print("--- LOADING VECTOR DATABASE ---")
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# --- VECTOR DB SETUP ---
+# This matches the model and task type used in ingest.py for consistency
+print("--- LOADING VECTOR DATABASE (GOOGLE EMBEDDINGS) ---")
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001",
+    task_type="retrieval_query"
+)
 vectorstore = Chroma(persist_directory=DB_PERSIST_DIRECTORY, embedding_function=embeddings)
 print("--- DATABASE LOADED ---")
 
@@ -92,7 +97,7 @@ async def chat_endpoint(
 
     rag_enabled = str(use_rag).lower() not in ("false", "0", "null", "none", "")
 
-    # Unpack 3 values: answer, sources, AND mode
+    # Execute AI Logic
     answer, sources, mode = ask_gemini_multimodal(question, history, image_path, vectorstore, rag_enabled)
     
     if image_path:
@@ -103,34 +108,24 @@ async def chat_endpoint(
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
 async def download_file(filename: str):
-    # 1. Force decode the URL
     decoded_filename = urllib.parse.unquote(filename)
-    
-    # 2. Get the absolute path to the main 'data' folder
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     data_folder = os.path.join(BASE_DIR, "data") 
     
     print(f"\n--- DOWNLOAD REQUEST ---")
-    print(f"📥 Searching for: '{decoded_filename}' inside '{data_folder}' and its subfolders...")
+    print(f"📥 Searching for: '{decoded_filename}'...")
     
-    # 3. RECURSIVE SEARCH (The Magic Fix)
     found_file_path = None
-    
-    # os.walk goes through every single folder and subfolder
     for root, dirs, files in os.walk(data_folder):
         if decoded_filename in files:
-            # We found it! Combine the current folder path with the file name
             found_file_path = os.path.join(root, decoded_filename)
-            break # Stop searching
+            break
             
-    # 4. If the loop finishes and we still haven't found it
     if not found_file_path:
-        print("❌ ERROR: File could not be found anywhere in the data folder or its subfolders!")
+        print("❌ ERROR: File not found!")
         raise HTTPException(status_code=404, detail="File not found")
 
-    print(f"✅ File found at: {found_file_path}")
-    print("🚀 Sending to browser...")
-    
+    print(f"✅ File found! Sending to browser...")
     return FileResponse(
         path=found_file_path, 
         filename=decoded_filename, 
@@ -139,11 +134,9 @@ async def download_file(filename: str):
     )
 
 # --- SERVER STARTUP ---
-# THIS MUST ALWAYS BE AT THE VERY BOTTOM OF THE FILE!
 if __name__ == "__main__":
     import uvicorn
-    # Render provides a 'PORT' environment variable. If it doesn't exist, we use 8000.
+    # Render dynamic port binding
     port = int(os.environ.get("PORT", 8000))
-    
-    print(f"🚀 Starting server on port {port}...")
+    print(f"🚀 Starting SPPU Assistant on port {port}...")
     uvicorn.run(app, host="0.0.0.0", port=port)
