@@ -1,0 +1,28 @@
+# --- API Keys & Secrets ---
+.env
+*.env
+
+# --- Python / Backend ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+backend/temp_*.jpg
+
+# --- Local Databases ---
+# We ignore these because they contain local data specific to your PC
+student_assistant.db
+backend/student_assistant.db
+backend/chroma_db/
+
+# --- Node / Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.eslintcache
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db

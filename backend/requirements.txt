@@ -1,0 +1,13 @@
+elevenlabs==2.36.1
+fastapi==0.129.0
+langchain_community==0.4.1
+langchain_core==1.2.14
+langchain_groq==1.1.2
+langchain_text_splitters==1.1.1
+passlib==1.7.4
+Pillow==12.1.1
+protobuf==6.33.5
+pydantic==2.12.5
+python-dotenv==1.2.1
+SQLAlchemy==2.0.27
+uvicorn==0.41.0
