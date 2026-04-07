@@ -16,13 +16,15 @@ beautifulsoup4
 langchain
 langchain-core
 langchain-community
+langchain-huggingface
 langchain-text-splitters
 langchain-groq
 groq
+
+# --- VOICE / TTS ENGINE ---
 edge-tts
 
 # --- VECTOR DATABASE & INGESTION ---
 sentence-transformers==2.6.1
-elevenlabs
 chromadb==0.4.24
 pypdf==4.2.0
