@@ -173,7 +173,8 @@ async def sync_sppu_notices():
 async def view_pdf(filename: str):
     decoded_filename = unquote(filename)
     
-    search_pattern = os.path.join("data", "**", decoded_filename)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    search_pattern = os.path.join(BASE_DIR, "data", "**", decoded_filename)
     files = glob.glob(search_pattern, recursive=True)
     
     if files:
@@ -183,7 +184,6 @@ async def view_pdf(filename: str):
     
     print(f"File NOT found: {decoded_filename}")
     raise HTTPException(status_code=404, detail="File not found in any subfolders")
-
 
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
