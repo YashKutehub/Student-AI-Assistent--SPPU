@@ -3,7 +3,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Paperclip, Bot, User, X, Loader2, Plus, MessageSquare, Trash2, Menu, ChevronLeft, Database, Zap, Download, Volume2, Play, Pause, RefreshCw } from 'lucide-react';
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function App() {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -394,7 +394,7 @@ function App() {
               <User size={16} className="text-white" />
             </div>
             <div className="flex-1 overflow-hidden">
-              <p className="text-sm font-medium truncate">Saurav Wankhade</p>
+              <p className="text-sm font-medium truncate">Yash Kute</p>
               <p className="text-xs text-emerald-400">Final Year - SPPU</p>
             </div>
           </div>
