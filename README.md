@@ -1,3 +1,13 @@
+---
+title: Student AI SPPU
+emoji: 🎓
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
+
 ```markdown
 # 🎓 SPPU Student AI Assistant
 
