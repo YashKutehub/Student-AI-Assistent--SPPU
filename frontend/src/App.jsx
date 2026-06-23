@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Paperclip, Bot, User, X, Loader2, Plus, MessageSquare, Trash2, Menu, ChevronLeft, Database, Zap, Download, Volume2, Play, Pause, RefreshCw } from 'lucide-react';
-const API_URL = "http://localhost:8000"; 
+
+const API_URL = "http://localhost:8000";
 
 function App() {
   const [isSyncing, setIsSyncing] = useState(false);
@@ -13,18 +14,24 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const [isSidebarOpen, setSidebarOpen] = useState(true);
+  const [isSidebarOpen, setSidebarOpen] = useState(false); // default closed on mobile
   const [isRagEnabled, setIsRagEnabled] = useState(true);
-  
-  // NEW: Audio Control States
+  const [showMobileMenu, setShowMobileMenu] = useState(false); // mobile mode toggle sheet
+
   const [playingId, setPlayingId] = useState(null);
   const [isAudioPaused, setIsAudioPaused] = useState(false);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
-  const currentAudioRef = useRef(null); // Prevents overlapping audio
+  const currentAudioRef = useRef(null);
+
+  // Detect if we're on mobile
+  const isMobile = () => window.innerWidth < 768;
 
   useEffect(() => {
+    // On desktop, open sidebar by default
+    if (!isMobile()) setSidebarOpen(true);
+
     const savedSessions = localStorage.getItem('sppu_chat_sessions');
     if (savedSessions) {
       const parsed = JSON.parse(savedSessions);
@@ -58,19 +65,19 @@ function App() {
       id: Date.now(),
       title: "New Chat",
       timestamp: new Date().toISOString(),
-      messages: [{ 
-        id: 'init', 
-        text: "Hello! I'm your SPPU Student Assistant. Ready to study? Ask me anything!", 
+      messages: [{
+        id: 'init',
+        text: "Hello! I'm your SPPU Student Assistant. Ready to study? Ask me anything!",
         sender: 'ai',
         sources: [],
-        mode: 'general' 
+        mode: 'general'
       }]
     };
     setSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newSession.id);
     setMessages(newSession.messages);
     setInput("");
-    if (window.innerWidth < 768) setSidebarOpen(false);
+    setSidebarOpen(false); // always close sidebar after action on mobile
   };
 
   const loadSession = (id, sessionList = sessions) => {
@@ -78,9 +85,8 @@ function App() {
     if (session) {
       setCurrentSessionId(id);
       setMessages(session.messages);
-      if (window.innerWidth < 768) setSidebarOpen(false);
-      
-      // Stop audio if switching sessions
+      setSidebarOpen(false);
+
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
         setPlayingId(null);
@@ -148,7 +154,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const recentHistory = updatedMessages.slice(-6).map(msg => 
+      const recentHistory = updatedMessages.slice(-4).map(msg =>
         `${msg.sender === 'user' ? 'Student' : 'Assistant'}: ${msg.text}`
       ).join('\n');
 
@@ -156,7 +162,7 @@ function App() {
       formData.append('question', userMessage.text || "Analyze this image");
       formData.append('history', recentHistory);
       formData.append('use_rag', isRagEnabled);
-      
+
       if (selectedImage) {
         formData.append('file', selectedImage);
       }
@@ -168,21 +174,17 @@ function App() {
       });
 
       const aiMessageId = Date.now() + 1;
-
-      // Notice how the auto-play ElevenLabs block is completely gone!
-      // This saves your credits and just sets up the clean message object.
       const aiMessage = {
         id: aiMessageId,
         text: response.data.answer,
         sender: 'ai',
         sources: response.data.sources || [],
         mode: response.data.mode,
-        audio_url: null,       // Ready for caching
-        isAudioLoading: false     // UI loader state
+        audio_url: null,
+        isAudioLoading: false
       };
 
       updateCurrentSessionMessages([...updatedMessages, aiMessage]);
-
     } catch (error) {
       console.error(error);
       const errorMessage = {
@@ -197,7 +199,6 @@ function App() {
     }
   };
 
-  // --- NEW: AUDIO HANDLING FUNCTIONS ---
   const updateSpecificMessage = (msgId, updates) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, ...updates } : m));
     setSessions(prev => prev.map(session => {
@@ -209,14 +210,11 @@ function App() {
   };
 
   const playAudio = (id, audioUrl) => {
-    // 🎯 THE FIX: Just pass the local URL, no more giant base64 strings
-    const audio = new Audio(audioUrl); 
+    const audio = new Audio(audioUrl);
     currentAudioRef.current = audio;
     setPlayingId(id);
     setIsAudioPaused(false);
-    
     audio.play();
-    
     audio.onended = () => {
       setPlayingId(null);
       setIsAudioPaused(false);
@@ -239,31 +237,24 @@ function App() {
       currentAudioRef.current.pause();
     }
 
-    // Check if we already created a memory-efficient URL for this message
     if (msg.audio_url) {
       playAudio(msg.id, msg.audio_url);
       return;
     }
 
     updateSpecificMessage(msg.id, { isAudioLoading: true });
-    
+
     try {
-      // 🎯 THE FIX: Tell Axios we want a binary Blob, not JSON text
       const res = await axios.post(`${API_URL}/speak`, { text: msg.text }, {
-        responseType: 'blob' 
+        responseType: 'blob'
       });
-      
-      // Create a tiny, temporary URL in the browser's memory pointing to the downloaded audio
       const audioUrl = URL.createObjectURL(res.data);
-      
-      // Cache the URL instead of the Base64 string
       updateSpecificMessage(msg.id, { audio_url: audioUrl, isAudioLoading: false });
       playAudio(msg.id, audioUrl);
-      
     } catch (err) {
       console.error("Audio fetch failed", err);
       updateSpecificMessage(msg.id, { isAudioLoading: false });
-      alert("Failed to generate audio. The text might still be too long or the backend is unreachable.");
+      alert("Failed to generate audio.");
     }
   };
 
@@ -274,11 +265,11 @@ function App() {
     }
     const currentSession = sessions.find(s => s.id === currentSessionId);
     const title = currentSession ? currentSession.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'sppu_study_session';
-    
+
     let chatContent = `# SPPU AI Assistant - Study Session\nDate: ${new Date().toLocaleString()}\nTopic: ${title}\n\n---\n\n`;
 
     messages.forEach(msg => {
-      if (msg.id === 'init') return; 
+      if (msg.id === 'init') return;
       const senderName = msg.sender === 'user' ? '🧑‍🎓 Student' : '🤖 SPPU Assistant';
       chatContent += `### ${senderName}\n${msg.text}\n\n`;
       if (msg.sources && msg.sources.length > 0) {
@@ -308,10 +299,11 @@ function App() {
   const getMessageStyle = (msg) => {
     if (msg.sender === 'user') return 'bg-blue-600 text-white rounded-tr-none';
     if (msg.isError) return 'bg-red-500/10 border border-red-500/20 text-red-200';
-    return msg.mode === 'rag' 
-      ? 'bg-slate-800/80 border border-cyan-500/30 text-cyan-50 shadow-[0_0_15px_rgba(6,182,212,0.1)] rounded-tl-none' 
+    return msg.mode === 'rag'
+      ? 'bg-slate-800/80 border border-cyan-500/30 text-cyan-50 shadow-[0_0_15px_rgba(6,182,212,0.1)] rounded-tl-none'
       : 'bg-slate-800/80 border border-orange-500/30 text-orange-50 shadow-[0_0_15px_rgba(249,115,22,0.1)] rounded-tl-none';
   };
+
   const handleSyncNotices = async () => {
     setIsSyncing(true);
     try {
@@ -326,16 +318,44 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-slate-900 text-white overflow-hidden font-sans">
-      
-      {/* SIDEBAR */}
-      <motion.aside 
-        initial={{ width: 0, opacity: 0 }}
-        animate={{ width: isSidebarOpen ? 260 : 0, opacity: isSidebarOpen ? 1 : 0 }}
-        className="bg-slate-900 border-r border-white/10 flex flex-col shrink-0 relative"
+    <div className="flex h-screen w-screen bg-slate-900 text-white overflow-hidden font-sans relative">
+
+      {/* ── SIDEBAR OVERLAY (mobile only) ── */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 z-30 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ── SIDEBAR ── */}
+      {/* On mobile: fixed overlay. On desktop: static flex column. */}
+      <motion.aside
+        initial={false}
+        animate={{ x: isSidebarOpen ? 0 : '-100%' }}
+        transition={{ type: 'tween', duration: 0.22 }}
+        className="fixed md:static top-0 left-0 h-full z-40 md:z-auto
+                   w-64 md:w-64
+                   bg-slate-900 border-r border-white/10
+                   flex flex-col shrink-0
+                   md:translate-x-0"
+        style={{ transform: undefined }} // let motion handle it on mobile; on md+ we use CSS
       >
-        <div className="p-4 flex flex-col gap-4 h-full">
-          <button 
+        {/* Close button inside sidebar (mobile only) */}
+        <button
+          onClick={() => setSidebarOpen(false)}
+          className="md:hidden absolute top-3 right-3 p-1.5 rounded-lg hover:bg-white/10 text-slate-400"
+        >
+          <X size={18} />
+        </button>
+
+        <div className="p-4 flex flex-col gap-4 h-full pt-12 md:pt-4">
+          <button
             onClick={createNewSession}
             className="flex items-center gap-3 bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-lg transition-all shadow-lg hover:shadow-blue-500/20 font-medium w-full"
           >
@@ -343,15 +363,15 @@ function App() {
             <span>New Chat</span>
           </button>
 
-          <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-2">
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 mt-2 pl-2">Recent Chats</h3>
             {sessions.map((session) => (
-              <div 
+              <div
                 key={session.id}
                 onClick={() => loadSession(session.id)}
                 className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-all ${
-                  currentSessionId === session.id 
-                    ? 'bg-slate-800 text-white border border-white/10' 
+                  currentSessionId === session.id
+                    ? 'bg-slate-800 text-white border border-white/10'
                     : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
                 }`}
               >
@@ -359,9 +379,9 @@ function App() {
                   <MessageSquare size={16} className={currentSessionId === session.id ? 'text-cyan-400' : 'text-slate-500'} />
                   <span className="truncate text-sm">{session.title}</span>
                 </div>
-                <button 
+                <button
                   onClick={(e) => deleteSession(e, session.id)}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity shrink-0"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -370,7 +390,7 @@ function App() {
           </div>
 
           <div className="pt-4 border-t border-white/10 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center shrink-0">
               <User size={16} className="text-white" />
             </div>
             <div className="flex-1 overflow-hidden">
@@ -381,164 +401,243 @@ function App() {
         </div>
       </motion.aside>
 
-      {/* MAIN CHAT */}
-      <main className="flex-1 flex flex-col h-full relative bg-slate-900/50">
-        
-        {/* HEADER */}
-        <header className="h-16 border-b border-white/10 bg-slate-900/50 backdrop-blur-md flex items-center justify-between px-4 z-10 shrink-0">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-white/5 rounded-lg text-slate-400 transition-colors">
-              {isSidebarOpen ? <ChevronLeft size={20}/> : <Menu size={20}/>}
+      {/* ── MAIN CHAT ── */}
+      <main className="flex-1 flex flex-col h-full relative bg-slate-900/50 min-w-0">
+
+        {/* ── HEADER ── */}
+        <header className="h-14 md:h-16 border-b border-white/10 bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-3 md:px-4 z-10 shrink-0 gap-2">
+
+          {/* Left: hamburger + title */}
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={() => setSidebarOpen(!isSidebarOpen)}
+              className="p-2 hover:bg-white/5 rounded-lg text-slate-400 transition-colors shrink-0"
+            >
+              <Menu size={20} />
             </button>
-            <h1 className="font-bold text-sm tracking-wide flex items-center gap-2">
-              SPPU Assistant <span className="bg-slate-800 text-[10px] px-2 py-0.5 rounded text-slate-300 border border-white/5">v2.2</span>
+            <h1 className="font-bold text-sm tracking-wide flex items-center gap-2 truncate">
+              <span className="hidden xs:inline">SPPU Assistant</span>
+              <span className="xs:hidden">SPPU</span>
+              <span className="bg-slate-800 text-[10px] px-1.5 py-0.5 rounded text-slate-300 border border-white/5 shrink-0">v2.2</span>
             </h1>
           </div>
-          <button 
-            onClick={handleSyncNotices} 
-            disabled={isSyncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-900/30 border border-emerald-500/30 transition-all disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">{isSyncing ? "Scraping SPPU..." : "Live Sync"}</span>
-          </button>
-          <div className="flex items-center gap-4">
-            <button onClick={exportChat} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent hover:border-white/10 transition-all">
-              <Download size={16} />
-              <span className="hidden sm:inline">Export Notes</span>
+
+          {/* Right: action buttons */}
+          <div className="flex items-center gap-1.5 md:gap-3 shrink-0">
+
+            {/* Sync — icon only on mobile */}
+            <button
+              onClick={handleSyncNotices}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-md text-xs font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-900/30 border border-emerald-500/30 transition-all disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
+              <span className="hidden md:inline">{isSyncing ? "Syncing..." : "Live Sync"}</span>
             </button>
 
-            <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-white/5">
-              <button onClick={() => setIsRagEnabled(true)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${isRagEnabled ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
-                <Database size={14} /> RAG Mode
+            {/* Export — icon only on mobile */}
+            <button
+              onClick={exportChat}
+              className="flex items-center gap-1.5 px-2 md:px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent hover:border-white/10 transition-all"
+            >
+              <Download size={16} />
+              <span className="hidden md:inline">Export</span>
+            </button>
+
+            {/* Mode toggle — compact on mobile */}
+            <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-white/5">
+              <button
+                onClick={() => setIsRagEnabled(true)}
+                className={`flex items-center gap-1 px-2 md:px-3 py-1.5 rounded-md text-xs font-medium transition-all ${isRagEnabled ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                title="RAG Mode"
+              >
+                <Database size={13} />
+                <span className="hidden sm:inline">RAG</span>
               </button>
-              <button onClick={() => setIsRagEnabled(false)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${!isRagEnabled ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
-                <Zap size={14} /> General
+              <button
+                onClick={() => setIsRagEnabled(false)}
+                className={`flex items-center gap-1 px-2 md:px-3 py-1.5 rounded-md text-xs font-medium transition-all ${!isRagEnabled ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+                title="General Mode"
+              >
+                <Zap size={13} />
+                <span className="hidden sm:inline">Gen</span>
               </button>
             </div>
           </div>
         </header>
 
-        {/* MESSAGES */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 scroll-smooth z-10">
+        {/* ── MESSAGES ── */}
+        <div className="flex-1 overflow-y-auto p-3 md:p-6 lg:p-8 space-y-4 md:space-y-6 scroll-smooth">
           <AnimatePresence>
             {messages.map((msg) => (
-              <motion.div key={msg.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`flex gap-4 ${msg.sender === 'user' ? 'justify-end' : 'justify-start max-w-3xl mx-auto w-full'}`}>
-                
+              <motion.div
+                key={msg.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex gap-2 md:gap-4 ${msg.sender === 'user' ? 'justify-end' : 'justify-start md:max-w-3xl md:mx-auto w-full'}`}
+              >
                 {msg.sender === 'ai' && (
                   <div className="flex flex-col items-center gap-2 mt-1 shrink-0">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center border border-white/10 ${msg.mode === 'rag' ? 'bg-cyan-900/50 text-cyan-400' : 'bg-orange-900/50 text-orange-400'}`}>
-                      {msg.mode === 'rag' ? <Database size={16} /> : <Zap size={16} />}
+                    <div className={`w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center border border-white/10 ${msg.mode === 'rag' ? 'bg-cyan-900/50 text-cyan-400' : 'bg-orange-900/50 text-orange-400'}`}>
+                      {msg.mode === 'rag' ? <Database size={14} /> : <Zap size={14} />}
                     </div>
-                    
-                    {/* NEW: On-Demand Listen Button */}
+
                     {msg.id !== 'init' && (
-                      <button 
+                      <button
                         onClick={() => handleListen(msg)}
                         disabled={msg.isAudioLoading}
-                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all border ${
-                          playingId === msg.id 
-                            ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]' 
+                        className={`w-6 h-6 md:w-7 md:h-7 rounded-full flex items-center justify-center transition-all border ${
+                          playingId === msg.id
+                            ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
                             : 'bg-slate-800 border-white/5 text-slate-400 hover:text-white hover:bg-slate-700'
                         }`}
-                        title="Listen to Explanation"
+                        title="Listen"
                       >
                         {msg.isAudioLoading ? (
-                          <Loader2 size={12} className="animate-spin text-cyan-400" />
+                          <Loader2 size={10} className="animate-spin text-cyan-400" />
                         ) : playingId === msg.id && !isAudioPaused ? (
-                          <Pause size={12} fill="currentColor" />
+                          <Pause size={10} fill="currentColor" />
                         ) : (
-                          <Play size={12} className="ml-0.5" fill="currentColor" />
+                          <Play size={10} className="ml-0.5" fill="currentColor" />
                         )}
                       </button>
                     )}
                   </div>
                 )}
 
-                <div className={`space-y-2 ${msg.sender === 'user' ? 'max-w-[80%]' : 'flex-1 min-w-0'}`}>
-                  
-                  {/* Speaking Indicator Badge (Synced with Play/Pause state) */}
+                <div className={`space-y-2 min-w-0 ${msg.sender === 'user' ? 'max-w-[85%] md:max-w-[75%]' : 'flex-1'}`}>
+
                   {playingId === msg.id && !isAudioPaused && (
-                    <motion.div 
+                    <motion.div
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       className="inline-flex items-center gap-1.5 bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold px-2 py-0.5 rounded-full mb-1 animate-pulse"
                     >
-                      <Volume2 size={12} /> Speaking...
+                      <Volume2 size={10} /> Speaking...
                     </motion.div>
                   )}
 
-                  <div className={`p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${getMessageStyle(msg)}`}>
-                    {msg.image && <img src={msg.image} alt="Uploaded" className="max-w-md w-full h-auto rounded-lg mb-3 border border-white/10" />}
-                    <div className="whitespace-pre-wrap markdown-body">
-                      {msg.text.split('**').map((part, i) => i % 2 === 1 ? <strong key={i} className={msg.mode === 'rag' ? "text-cyan-300 font-bold" : "text-orange-300 font-bold"}>{part}</strong> : part)}
+                  <div className={`p-3 md:p-4 rounded-2xl text-sm leading-relaxed shadow-sm ${getMessageStyle(msg)}`}>
+                    {msg.image && (
+                      <img src={msg.image} alt="Uploaded" className="max-w-full w-full h-auto rounded-lg mb-3 border border-white/10" />
+                    )}
+                    <div className="whitespace-pre-wrap break-words">
+                      {msg.text.split('**').map((part, i) =>
+                        i % 2 === 1
+                          ? <strong key={i} className={msg.mode === 'rag' ? "text-cyan-300 font-bold" : "text-orange-300 font-bold"}>{part}</strong>
+                          : part
+                      )}
                     </div>
                   </div>
 
-                  {/* SOURCES */}
+                  {/* Sources */}
                   {msg.sources && msg.sources.length > 0 && (
-                    <div className="flex flex-wrap gap-2 pl-1 mt-1">
+                    <div className="flex flex-wrap gap-1.5 pl-1 mt-1">
                       {msg.sources.map((src, idx) => {
                         const isPageCited = src.includes('[Pg.');
                         const fileNameOnly = src.split(' [Pg.')[0];
-                        const pageNumber = isPageCited ? src.match(/\[Pg\. (\d+)\]/)[1] : null;
+                        const pageMatch = src.match(/\[Pg\. (\d+)\]/);
+                        const pageNumber = pageMatch ? pageMatch[1] : null;
                         const viewUrl = `${API_URL}/view/${encodeURIComponent(fileNameOnly)}${pageNumber ? `#page=${pageNumber}` : ''}`;
 
                         return (
-                          <a 
-                            key={idx} 
+                          <a
+                            key={idx}
                             href={viewUrl}
-                            target="_blank" 
+                            target="_blank"
                             rel="noopener noreferrer"
-                            className="group text-[10px] bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-cyan-300 px-2 py-1 rounded border border-white/5 hover:border-cyan-500/30 truncate max-w-[280px] cursor-pointer transition-all flex items-center gap-1.5 shadow-sm"
+                            className="text-[10px] bg-slate-800/50 hover:bg-slate-700 text-slate-400 hover:text-cyan-300 px-2 py-1 rounded border border-white/5 hover:border-cyan-500/30 truncate max-w-[200px] md:max-w-[280px] cursor-pointer transition-all flex items-center gap-1"
                             title={`View ${fileNameOnly} at Page ${pageNumber || 1}`}
                           >
-                            {isPageCited ? '📍' : '📄'} {src}
-                            <Zap size={10} className="opacity-0 group-hover:opacity-100 transition-opacity text-cyan-400" />
+                            {isPageCited ? '📍' : '📄'} <span className="truncate">{src}</span>
                           </a>
                         );
                       })}
                     </div>
                   )}
+
                   {msg.sender === 'ai' && !msg.sources?.length && msg.mode === 'general' && (
-                     <div className="text-[10px] text-slate-500 pl-1 italic">Generated using General Knowledge</div>
+                    <div className="text-[10px] text-slate-500 pl-1 italic">Generated using General Knowledge</div>
                   )}
                 </div>
               </motion.div>
             ))}
           </AnimatePresence>
+
           {isLoading && (
-            <div className="max-w-3xl mx-auto w-full flex gap-4">
-               <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center shrink-0 border border-white/10">
-                  <Bot size={16} className="text-slate-400 animate-pulse" />
-               </div>
-               <div className="flex items-center gap-2 text-slate-400 text-sm pt-2"><Loader2 size={16} className="animate-spin text-cyan-400" /> Generating Intelligence...</div>
+            <div className="md:max-w-3xl md:mx-auto w-full flex gap-3">
+              <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center shrink-0 border border-white/10">
+                <Bot size={14} className="text-slate-400 animate-pulse" />
+              </div>
+              <div className="flex items-center gap-2 text-slate-400 text-sm pt-1">
+                <Loader2 size={15} className="animate-spin text-cyan-400" />
+                Generating Intelligence...
+              </div>
             </div>
           )}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* INPUT */}
-        <div className="p-4 bg-slate-900 border-t border-white/10 z-20">
-          <div className="max-w-3xl mx-auto w-full">
+        {/* ── INPUT ── */}
+        <div className="p-3 md:p-4 bg-slate-900 border-t border-white/10 z-20 safe-area-bottom">
+          <div className="md:max-w-3xl md:mx-auto w-full">
             <AnimatePresence>
               {previewUrl && (
-                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="flex items-center gap-3 mb-3 bg-slate-800 p-2 rounded-lg w-fit border border-white/10">
-                  <img src={previewUrl} alt="Preview" className="w-10 h-10 rounded object-cover" />
-                  <span className="text-xs text-slate-300 max-w-[200px] truncate">{selectedImage.name}</span>
-                  <button onClick={clearImage} className="p-1 hover:bg-white/10 rounded-full text-slate-400 hover:text-white"><X size={14} /></button>
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex items-center gap-3 mb-2 bg-slate-800 p-2 rounded-lg w-fit border border-white/10"
+                >
+                  <img src={previewUrl} alt="Preview" className="w-9 h-9 rounded object-cover" />
+                  <span className="text-xs text-slate-300 max-w-[160px] truncate">{selectedImage?.name}</span>
+                  <button onClick={clearImage} className="p-1 hover:bg-white/10 rounded-full text-slate-400 hover:text-white">
+                    <X size={14} />
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <div className={`flex items-center gap-3 bg-slate-800 p-2.5 rounded-xl border transition-all shadow-lg ${isRagEnabled ? 'focus-within:border-cyan-500/50 border-white/10' : 'focus-within:border-orange-500/50 border-white/10'}`}>
-              <input type="file" ref={fileInputRef} onChange={handleImageSelect} accept="image/*" className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} className={`p-2 rounded-lg transition-all ${selectedImage ? 'text-cyan-400 bg-cyan-400/10' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}><Paperclip size={20} /></button>
-              <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyPress} placeholder={isRagEnabled ? "Ask about your syllabus (RAG Mode)..." : "Ask anything (General Mode)..."} className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none min-w-0" disabled={isLoading} />
-              <button onClick={handleSend} disabled={isLoading || (!input.trim() && !selectedImage)} className={`p-2 rounded-lg text-white shadow-lg transition-all ${isRagEnabled ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-orange-600 hover:bg-orange-500'} disabled:opacity-50 disabled:cursor-not-allowed`}><Send size={18} /></button>
+            <div className={`flex items-center gap-2 bg-slate-800 px-2 py-2 rounded-xl border transition-all shadow-lg ${isRagEnabled ? 'focus-within:border-cyan-500/50 border-white/10' : 'focus-within:border-orange-500/50 border-white/10'}`}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleImageSelect}
+                accept="image/*"
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-1.5 rounded-lg transition-all shrink-0 ${selectedImage ? 'text-cyan-400 bg-cyan-400/10' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+              >
+                <Paperclip size={18} />
+              </button>
+
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyPress}
+                placeholder={isRagEnabled ? "Ask about your syllabus..." : "Ask anything..."}
+                className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none min-w-0 py-1"
+                disabled={isLoading}
+              />
+
+              <button
+                onClick={handleSend}
+                disabled={isLoading || (!input.trim() && !selectedImage)}
+                className={`p-2 rounded-lg text-white shadow-lg transition-all shrink-0 ${isRagEnabled ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-orange-600 hover:bg-orange-500'} disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                <Send size={16} />
+              </button>
             </div>
-            <div className="text-center mt-2">
-              <p className="text-[10px] text-slate-600">Mode: <span className={isRagEnabled ? "text-cyan-400 font-bold" : "text-orange-500 font-bold"}>{isRagEnabled ? "RAG (Files)" : "General (Internet)"}</span></p>
+
+            <div className="text-center mt-1.5">
+              <p className="text-[10px] text-slate-600">
+                Mode: <span className={isRagEnabled ? "text-cyan-400 font-bold" : "text-orange-500 font-bold"}>
+                  {isRagEnabled ? "RAG (Files)" : "General (Internet)"}
+                </span>
+              </p>
             </div>
           </div>
         </div>

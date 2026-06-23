@@ -9,6 +9,7 @@
 # Virtual Environments
 backend/.venv/
 .venv/
+backend/venv/
 
 # Python Cache
 __pycache__/
@@ -20,6 +21,7 @@ __pycache__/
 # RAG Database & Raw Files
 backend/chroma_db/
 backend/data/
+
 
 # ==========================
 # FRONTEND (React / Node)

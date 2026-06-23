@@ -1,5 +1,6 @@
 import os
 import base64
+from functools import lru_cache
 from PIL import Image
 import io
 from dotenv import load_dotenv
@@ -14,12 +15,34 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 load_dotenv()
 DB_PERSIST_DIRECTORY = "./chroma_db"
 
-print("🧠 Loading Cross-Encoder Reranker...")
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+print("🧠 Loading Embedding + Reranker engines...")
+
+
+
+@lru_cache(maxsize=1)
+def get_embeddings():
+    return HuggingFaceEmbeddings(
+        model_name="BAAI/bge-base-en-v1.5",
+        model_kwargs={"device": "cuda"},        # 🔧 use GTX 1650
+        encode_kwargs={
+            "normalize_embeddings": True,
+            "batch_size": 32,                   # 🔧 safe for 4GB VRAM
+        },
+    )
+
+# 
+@lru_cache(maxsize=1)
+def get_reranker():
+    return CrossEncoder('BAAI/bge-reranker-base')
+
+
+@lru_cache(maxsize=1)
+def get_vectorstore():
+    return Chroma(persist_directory=DB_PERSIST_DIRECTORY, embedding_function=get_embeddings())
 
 # --- 🚀 GROQ MODEL DEFINITIONS ---
-TEXT_MODEL_NAME = "llama-3.1-8b-instant"          # Ultra-fast text model
-VISION_MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct" # Vision model
+TEXT_MODEL_NAME = "llama-3.3-70b-versatile"         # 70b parameter text model
+VISION_MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct"  # Vision model
 
 print("\n--- 🕵️‍♂️ INITIALIZING GROQ AI ENGINE ---")
 
@@ -29,59 +52,85 @@ else:
     print(f"✅ Text Engine: {TEXT_MODEL_NAME}")
     print(f"✅ Vision Engine: {VISION_MODEL_NAME}")
 
+
+@lru_cache(maxsize=4)
 def get_groq_llm(model_name):
-    """Creates a Groq LLM instance."""
+    """Creates and reuses a Groq LLM instance for lower startup overhead."""
     return ChatGroq(
         model_name=model_name,
-        temperature=0.7,
-        max_retries=2,
+        temperature=0.2,
+        max_tokens=700,
+        max_retries=1,
     )
 
 # --- 🛠️ UTILS ---
 def encode_image(image_path):
     """Encodes image to base64 with optimization for local-to-cloud transfer."""
-    if not image_path or not os.path.exists(image_path): return None
+    if not image_path or not os.path.exists(image_path):
+        return None
     try:
         with Image.open(image_path) as img:
-            # Convert to standard RGB
             if img.mode != 'RGB':
                 img = img.convert('RGB')
-                
-            # Resize for efficiency
+
             max_size = (1600, 1600)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            
-            # Save to memory buffer
+
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=80, optimize=True)
-            
+
             size_mb = buffer.tell() / (1024 * 1024)
             print(f"📉 Image optimized: {size_mb:.2f} MB")
-            
+
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
     except Exception as e:
         print(f"❌ Error encoding image: {e}")
         return None
 
+
+#
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+#
+RERANK_CONFIDENCE_THRESHOLD = 0.0
+
+
 def retrieve_context_with_sources(query, vectorstore):
-    """Stage 1: Broad Search. Stage 2: Deep Reranking."""
+    """Stage 1: Fast candidate retrieval. Stage 2: Cross-encoder reranking for precision."""
     try:
-        # STAGE 1: Fast Vector Search (Get top 15 candidates)
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 15})
-        initial_docs = retriever.invoke(query)
-
-        # STAGE 2: Cross-Encoder Reranking
-        # We pair the user query with every chunk to score their actual relationship
-        sentence_pairs = [[query, doc.page_content] for doc in initial_docs]
-        scores = reranker.predict(sentence_pairs)
-
-        # Sort the documents by their new, highly-accurate scores (Highest to Lowest)
-        sorted_indices = np.argsort(scores)[::-1]
         
-        # Keep only the absolute best 4 chunks for the LLM to read
-        top_k_docs = [initial_docs[i] for i in sorted_indices[:4]]
+        search_query = BGE_QUERY_PREFIX + query
 
-        # Format context and extract unique sources (same as before)
+       
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
+        initial_docs = retriever.invoke(search_query)
+        if not initial_docs:
+            return "", []
+
+        
+      
+        reranker = get_reranker()
+        sentence_pairs = [[query, doc.page_content] for doc in initial_docs]
+        scores = np.asarray(reranker.predict(sentence_pairs), dtype=np.float32)
+
+        sorted_indices = np.argsort(scores)[::-1]
+
+        #
+        top_indices = [int(i) for i in sorted_indices if scores[i] >= RERANK_CONFIDENCE_THRESHOLD][:4]
+
+        #
+        if not top_indices:
+            print("⚠️ No chunk passed the confidence threshold — falling back to general knowledge.")
+            return "", []
+
+        top_k_docs = [initial_docs[i] for i in top_indices]
+
+        # 
+        print("🔎 Retrieved chunks (reranked):")
+        for i in top_indices:
+            src = os.path.basename(initial_docs[i].metadata.get('source', 'Unknown'))
+            print(f"   score={scores[i]:.3f}  src={src}")
+
         formatted_text = ""
         sources_with_pages = []
         for d in top_k_docs:
@@ -91,12 +140,13 @@ def retrieve_context_with_sources(query, vectorstore):
             sources_with_pages.append(f"{name} [Pg. {page}]")
 
         unique_sources = list(dict.fromkeys(sources_with_pages))
-        
+
         return formatted_text, unique_sources
 
     except Exception as e:
         print(f"❌ Reranking Error: {e}")
         return "", []
+
 
 # --- 🧠 MAIN CHAT FUNCTION ---
 def generate_llm_response(query, context_text, chat_history, image_path, use_rag=True):
@@ -116,36 +166,44 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
 
     # 3. Apply the Specialized SPPU System Prompt
     if use_rag and context_text:
+       
         system_text = (
-            "You are an elite Academic AI Assistant specifically designed for SPPU engineering students. "
-            "Your primary role is to assist with rigorous exam preparation, simplify complex technical concepts, and break down logic step-by-step.\n\n"
+            "You are an elite Academic AI Assistant for SPPU engineering students. "
+            "Your job is rigorous exam prep: simplify complex concepts and explain logic step-by-step.\n\n"
             "### 🎯 CORE DIRECTIVES:\n"
-            "1. **Context First:** Always attempt to answer using the provided **CONTEXT** first. If you use the context, you MUST cite the exact source document name at the end of your points.\n"
-            "2. **The 'Out-of-Syllabus' Fallback:** If the user's query cannot be answered using the provided context, you MUST STILL answer the question using your general knowledge. However, you MUST begin your response with this exact warning: '⚠️ *I could not find this specific topic in your provided study materials, but based on general knowledge:*'\n"
-            "3. **Study-Optimized Formatting:** Structure your answers to be highly readable for a student reviewing for exams. Use bullet points, bold key technical terms, and provide concise summaries.\n"
-            "4. **Technical Precision:** When explaining algorithms, data structures, or engineering principles, break down the logic systematically.\n"
-            "5. **Visual Analysis:** If an image (diagram/paper) is provided, analyze it meticulously and connect it to the user's question.\n\n"
+            "1. **Context is the source of truth.** Answer using ONLY the provided CONTEXT below whenever it "
+            "contains the answer. Do NOT add outside facts when the context already covers the topic. "
+            "Cite the exact source document name at the end of the relevant points.\n"
+            "2. **Partial-context handling:** If the CONTEXT only partially answers the question, answer the "
+            "covered part from context (and cite it), then clearly mark any added explanation as general knowledge.\n"
+            "3. **True fallback only:** If the CONTEXT does not address the question at all, you MUST begin your "
+            "response with this exact warning: '⚠️ *I could not find this specific topic in your provided study "
+            "materials, but based on general knowledge:*' and then answer.\n"
+            "4. **Study formatting:** Use bullet points, bold key technical terms, and concise summaries.\n"
+            "5. **Technical precision:** Break down algorithms, data structures, and engineering logic systematically.\n"
+            "6. **Visual analysis:** If an image (diagram/paper) is provided, analyze it and connect it to the question.\n\n"
             f"--- HISTORY ---\n{chat_history}\n\n"
             f"--- CONTEXT ---\n{context_text}"
         )
     else:
+        
         system_text = (
-            "You are a helpful SPPU AI Assistant. Answer based on general engineering knowledge.\n"
+            "You are a helpful SPPU AI Assistant. No specific study material was found for this question, "
+            "so answer using general engineering knowledge. Begin your answer with this exact warning: "
+            "'⚠️ *I could not find this specific topic in your provided study materials, but based on general knowledge:*'\n"
             f"--- HISTORY ---\n{chat_history}"
         )
 
     # 4. Payload Construction
     content_payload = []
     if image_path:
-        # We pass the image_path directly here if your api.py saves it temporarily, 
-        # or adjust if api.py is passing the raw base64 string.
         b64 = encode_image(image_path)
         if b64:
             content_payload.append({
-                "type": "image_url", 
+                "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
             })
-            
+
     content_payload.append({"type": "text", "text": query})
 
     messages = [

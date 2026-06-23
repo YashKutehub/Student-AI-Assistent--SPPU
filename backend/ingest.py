@@ -7,26 +7,37 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
 # 1. Setup
 load_dotenv()
 DATA_PATH = "./data"
 DB_PATH = "./chroma_db"
 
+
 def main():
     print("🧠 Initializing Embedding Engine...")
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+    embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-base-en-v1.5",
+    model_kwargs={"device": "cuda"},            # 🔧 use GTX 1650
+    encode_kwargs={
+        "normalize_embeddings": True,
+        "batch_size": 32,                       # 🔧 safe for 4GB VRAM
+    },
+)
 
     # --- 1. LOAD EXISTING DB & CHECK PROCESSED FILES ---
     processed_files = set()
     db = None
-    
+
     if os.path.exists(DB_PATH):
         print(f"📂 Loading existing database from '{DB_PATH}'...")
         db = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
-        
+
         existing_data = db.get(include=["metadatas"])
-        
+
         processed_files = set(
             meta.get("source") for meta in existing_data["metadatas"] if meta and "source" in meta
         )
@@ -42,10 +53,10 @@ def main():
     for root, dirs, files in os.walk(DATA_PATH):
         for file in files:
             if file.lower().endswith(".pdf"):
-                
+
                 if file in processed_files:
-                    continue 
-                
+                    continue
+
                 file_path = os.path.join(root, file)
                 print(f"   ✨ NEW FILE DETECTED: {file}")
                 try:
@@ -72,9 +83,12 @@ def main():
 
     # --- 4. SPLIT TEXT & INJECT METADATA ---
     print("✂️ Splitting text into chunks...")
+
+    
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=100
+        chunk_size=600,
+        chunk_overlap=120,
+        separators=["\n\n", "\n", ". ", " ", ""]
     )
     chunks = text_splitter.split_documents(documents)
 
@@ -83,7 +97,7 @@ def main():
         print("\n⚠️ No text chunks could be created from the downloaded PDFs.")
         print("    Skipping vector DB update to prevent embedding errors.")
         return
-    
+
     # 🎯 THE PERMANENT RAG FIX: Physical Metadata Injection
     print("💉 Injecting filenames directly into the text content...")
     for chunk in chunks:
@@ -95,17 +109,24 @@ def main():
 
     # --- 5. UPDATE VECTOR DATABASE ---
     print("🧠 Embedding new chunks into the database...")
-    
+    BATCH_SIZE = 500
     if db is None:
         db = Chroma.from_documents(
-            documents=chunks, 
-            embedding=embeddings, 
+            documents=chunks[:BATCH_SIZE],
+            embedding=embeddings,
             persist_directory=DB_PATH
         )
+        remaining = chunks[BATCH_SIZE:]
     else:
-        db.add_documents(documents=chunks)
+        remaining = chunks
+
+    for i in range(0, len(remaining), BATCH_SIZE):
+        batch = remaining[i:i + BATCH_SIZE]
+        db.add_documents(documents=batch)
+        print(f"   ✅ Batch {i//BATCH_SIZE + 1}/{(len(remaining)-1)//BATCH_SIZE + 1} embedded")
 
     print(f"🎉 Success! Database updated with highly-searchable chunks at '{DB_PATH}'")
+
 
 if __name__ == "__main__":
     main()
