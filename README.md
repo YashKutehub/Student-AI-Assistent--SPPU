@@ -29,9 +29,8 @@ Follow these steps carefully to get both the backend and frontend running on you
 
 ### Step 1: Clone the Repository
 Open your terminal or command prompt and run:
-```bash
-git clone [https://github.com/saurav-wankhade/Student-AI.git](https://github.com/saurav-wankhade/Student-AI.git)
-cd Student-AI
+git clone https://github.com/YashKutehub/Student-AI-Assistent--SPPU.git
+cd Student-AI-Assistent--SPPU
 ```
 
 ### Step 2: Set Up the Python Backend
