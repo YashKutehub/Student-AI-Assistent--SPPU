@@ -23,10 +23,10 @@ print("🧠 Loading Embedding + Reranker engines...")
 def get_embeddings():
     return HuggingFaceEmbeddings(
         model_name="BAAI/bge-base-en-v1.5",
-        model_kwargs={"device": "cuda"},        # 🔧 use GTX 1650
+        model_kwargs={"device": "cpu"},        
         encode_kwargs={
             "normalize_embeddings": True,
-            "batch_size": 32,                   # 🔧 safe for 4GB VRAM
+            "batch_size": 32,                   
         },
     )
 
