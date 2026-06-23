@@ -5,6 +5,7 @@ import glob
 import uuid
 import base64
 import sys
+from datetime import date
 from scraper import scrape_latest_sppu_notice
 import subprocess
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -25,6 +26,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---- DAILY REQUEST LIMITER ----
+request_count = {"date": date.today(), "count": 0}
+MAX_DAILY_REQUESTS = 200
+
+@app.middleware("http")
+async def limit_requests(request, call_next):
+    if request.url.path in ["/chat", "/speak"]:
+        if request_count["date"] != date.today():
+            request_count["date"] = date.today()
+            request_count["count"] = 0
+        if request_count["count"] >= MAX_DAILY_REQUESTS:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Daily limit reached. Try again tomorrow."}
+            )
+        request_count["count"] += 1
+    return await call_next(request)
+# ---- END LIMITER ----
 
 # --- VECTOR DB SETUP ---
 print("--- LOADING VECTOR DATABASE ---")
@@ -111,8 +131,6 @@ async def sync_sppu_notices():
             print("New file detected! Triggering Vector Database Update...")
             backend_dir = os.path.dirname(os.path.abspath(__file__))
 
-            # FIX: added encoding="utf-8" and PYTHONIOENCODING env var
-            # to prevent Windows cp1252 UnicodeDecodeError from emoji in print statements
             result = subprocess.run(
                 [sys.executable, "ingest.py"],
                 cwd=backend_dir,
