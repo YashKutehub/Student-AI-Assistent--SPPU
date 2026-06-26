@@ -9,7 +9,7 @@ from datetime import date
 from scraper import scrape_latest_sppu_notice
 import subprocess
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import unquote
 from pydantic import BaseModel
@@ -46,6 +46,7 @@ async def limit_requests(request, call_next):
     return await call_next(request)
 # ---- END LIMITER ----
 
+
 # --- VECTOR DB SETUP ---
 print("--- LOADING VECTOR DATABASE ---")
 vectorstore = get_vectorstore()
@@ -64,14 +65,14 @@ async def chat_endpoint(
     try:
         print(f"Received Question: {question}")
         is_rag = use_rag.lower() == "true"
-        
+
         if file:
             os.makedirs("temp", exist_ok=True)
             temp_image_path = f"temp/{uuid.uuid4()}_{file.filename}"
             with open(temp_image_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             print(f"Image saved temporarily at {temp_image_path}")
-            
+
         context = ""
         sources = []
         if is_rag:
@@ -85,13 +86,13 @@ async def chat_endpoint(
             "answer": answer,
             "sources": sources,
             "mode": "rag" if is_rag else "general",
-            "audio_base64": None  
+            "audio_base64": None
         })
 
     except Exception as e:
         print(f"API Error: {e}")
         return JSONResponse(content={"answer": "Sorry, a server error occurred.", "sources": [], "mode": "error", "audio_base64": None})
-        
+
     finally:
         if temp_image_path and os.path.exists(temp_image_path):
             os.remove(temp_image_path)
@@ -106,15 +107,15 @@ async def speak_endpoint(req: SpeakRequest):
     print("Synthesizing Voice Tutor Audio on demand...")
     try:
         clean_text = req.text.replace("**", "").replace("*", "").replace("#", "")
-        
+
         if len(clean_text) > 3500:
             clean_text = clean_text[:3500] + "... The rest of the answer has been truncated for audio playback."
-            
+
         audio_bytes = await generate_tutor_audio(clean_text)
-        
+
         if audio_bytes:
             return Response(content=audio_bytes, media_type="audio/mpeg")
-            
+
         raise HTTPException(status_code=500, detail="Audio generation failed")
     except Exception as e:
         print(f"Speak Error: {e}")
@@ -126,7 +127,7 @@ async def speak_endpoint(req: SpeakRequest):
 async def sync_sppu_notices():
     try:
         success, message = scrape_latest_sppu_notice()
-        
+
         if success:
             print("New file detected! Triggering Vector Database Update...")
             backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -160,56 +161,54 @@ async def sync_sppu_notices():
                 message += f" and injected into AI Memory (ingest completed). Ingest log tail: {ingest_tail}"
             else:
                 message += " and injected into AI Memory (ingest completed)."
-            
+
         return {"status": "success" if success else "warning", "message": message}
-        
+
     except Exception as e:
         print(f"Sync API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- PDF VIEW ENDPOINT ---
-@app.get("/view/{filename:path}")
-async def view_pdf(filename: str):
-    decoded_filename = unquote(filename)
-    
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    search_pattern = os.path.join(BASE_DIR, "data", "**", decoded_filename)
-    files = glob.glob(search_pattern, recursive=True)
-    
-    if files:
-        file_path = os.path.abspath(files[0])
-        print(f"File found at: {file_path}")
-        return FileResponse(file_path, media_type='application/pdf')
-    
-    print(f"File NOT found: {decoded_filename}")
-    raise HTTPException(status_code=404, detail="File not found in any subfolders")
+DATASET_BASE_URL = "https://huggingface.co/datasets/Yashkute/sppu-pdf-docs/resolve/main/data"
+
+@app.get("/view/{file_path:path}")
+async def view_pdf(file_path: str):
+    url = f"{DATASET_BASE_URL}/{file_path}"
+    return RedirectResponse(url=url)
+
 
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
 async def download_file(filename: str):
     decoded_filename = urllib.parse.unquote(filename)
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    data_folder = os.path.join(BASE_DIR, "data") 
-    
+    data_folder = os.path.join(BASE_DIR, "data")
+
     print(f"Download request: {decoded_filename}")
-    
+
     found_file_path = None
     for root, dirs, files in os.walk(data_folder):
         if decoded_filename in files:
             found_file_path = os.path.join(root, decoded_filename)
-            break 
-            
+            break
+
     if not found_file_path:
         raise HTTPException(status_code=404, detail="File not found")
 
     print(f"File found at: {found_file_path}")
     return FileResponse(
-        path=found_file_path, 
-        filename=decoded_filename, 
+        path=found_file_path,
+        filename=decoded_filename,
         media_type='application/pdf',
         headers={"Content-Disposition": f'attachment; filename="{decoded_filename}"'}
     )
+
+
+# --- ROOT HEALTH CHECK ---
+@app.get("/")
+def root():
+    return {"status": "Student AI SPPU backend is running"}
 
 
 # --- SERVER STARTUP ---
