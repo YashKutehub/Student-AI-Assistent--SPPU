@@ -170,13 +170,19 @@ async def sync_sppu_notices():
 
 
 # --- PDF VIEW ENDPOINT ---
+
+
+_mapping_path = os.path.join(os.path.dirname(__file__), "pdf_mapping.json")
+with open(_mapping_path) as f:
+    PDF_MAPPING = json.load(f)
+
 DATASET_BASE_URL = "https://huggingface.co/datasets/Yashkute/sppu-pdf-docs/resolve/main/data"
 
 @app.get("/view/{file_path:path}")
 async def view_pdf(file_path: str):
-    url = f"{DATASET_BASE_URL}/{file_path}"
+    actual_path = PDF_MAPPING.get(file_path, file_path)
+    url = f"{DATASET_BASE_URL}/{actual_path}"
     return RedirectResponse(url=url)
-
 
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
