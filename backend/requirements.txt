@@ -1,0 +1,30 @@
+# --- API & SERVER ---
+fastapi==0.129.0
+uvicorn==0.41.0
+python-multipart==0.0.9
+pydantic==2.12.5
+
+# --- ENVIRONMENT & UTILS ---
+python-dotenv==1.2.1
+Pillow==12.1.1
+numpy<2.0.0
+requests
+beautifulsoup4
+
+# --- LANGCHAIN ECOSYSTEM ---
+# (Unpinned to allow pip to resolve the perfect compatible matrix)
+langchain
+langchain-core
+langchain-community
+langchain-huggingface
+langchain-text-splitters
+langchain-groq
+groq
+
+# --- VOICE / TTS ENGINE ---
+edge-tts
+
+# --- VECTOR DATABASE & INGESTION ---
+sentence-transformers==2.6.1
+chromadb==0.4.24
+pypdf==4.2.0
