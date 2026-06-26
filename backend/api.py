@@ -5,6 +5,7 @@ import glob
 import uuid
 import base64
 import sys
+import json
 from datetime import date
 from scraper import scrape_latest_sppu_notice
 import subprocess
