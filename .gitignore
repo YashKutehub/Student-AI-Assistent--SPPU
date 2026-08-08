@@ -19,7 +19,7 @@ __pycache__/
 .env
 
 # RAG Database & Raw Files
-#backend/chroma_db/
+chroma_db/
 backend/data/
 
 
