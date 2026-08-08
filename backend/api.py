@@ -5,17 +5,17 @@ import glob
 import uuid
 import base64
 import sys
-import json
 from datetime import date
 from scraper import scrape_latest_sppu_notice
 import subprocess
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import unquote
 from pydantic import BaseModel
 from backend import DB_PERSIST_DIRECTORY, retrieve_context_with_sources, generate_llm_response, get_vectorstore
 from voice_agent import generate_tutor_audio
+from agent import run_agent
 
 
 # --- SETUP ---
@@ -47,7 +47,6 @@ async def limit_requests(request, call_next):
     return await call_next(request)
 # ---- END LIMITER ----
 
-
 # --- VECTOR DB SETUP ---
 print("--- LOADING VECTOR DATABASE ---")
 vectorstore = get_vectorstore()
@@ -74,19 +73,19 @@ async def chat_endpoint(
                 shutil.copyfileobj(file.file, buffer)
             print(f"Image saved temporarily at {temp_image_path}")
 
-        context = ""
-        sources = []
-        if is_rag:
-            print("Running Two-Stage Cross-Encoder Search...")
-            context, sources = retrieve_context_with_sources(question, vectorstore)
-
-        print("Generating AI Response...")
-        answer = generate_llm_response(question, context, history, temp_image_path, use_rag=is_rag)
+        if is_rag and not temp_image_path:
+            print("Running agent...")
+            answer, sources = run_agent(question, history)
+            mode = "agent"
+        else:
+            answer = generate_llm_response(question, "", history, temp_image_path, use_rag=is_rag)
+            sources = []
+            mode = "vision" if temp_image_path else "general"
 
         return JSONResponse(content={
             "answer": answer,
             "sources": sources,
-            "mode": "rag" if is_rag else "general",
+            "mode": mode,
             "audio_base64": None
         })
 
@@ -123,7 +122,7 @@ async def speak_endpoint(req: SpeakRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- LIVE SYNC ENDPOINT ---
+# --- LIVE SYNC ENDPOINT (kept as manual override) ---
 @app.post("/sync-notices")
 async def sync_sppu_notices():
     try:
@@ -171,19 +170,21 @@ async def sync_sppu_notices():
 
 
 # --- PDF VIEW ENDPOINT ---
+@app.get("/view/{filename:path}")
+async def view_pdf(filename: str):
+    decoded_filename = unquote(filename)
 
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    search_pattern = os.path.join(BASE_DIR, "data", "**", decoded_filename)
+    files = glob.glob(search_pattern, recursive=True)
 
-_mapping_path = os.path.join(os.path.dirname(__file__), "pdf_mapping.json")
-with open(_mapping_path) as f:
-    PDF_MAPPING = json.load(f)
+    if files:
+        file_path = os.path.abspath(files[0])
+        print(f"File found at: {file_path}")
+        return FileResponse(file_path, media_type='application/pdf')
 
-DATASET_BASE_URL = "https://huggingface.co/datasets/Yashkute/sppu-pdf-docs/resolve/main/data"
-
-@app.get("/view/{file_path:path}")
-async def view_pdf(file_path: str):
-    actual_path = PDF_MAPPING.get(file_path, file_path)
-    url = f"{DATASET_BASE_URL}/{actual_path}"
-    return RedirectResponse(url=url)
+    print(f"File NOT found: {decoded_filename}")
+    raise HTTPException(status_code=404, detail="File not found in any subfolders")
 
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
@@ -210,12 +211,6 @@ async def download_file(filename: str):
         media_type='application/pdf',
         headers={"Content-Disposition": f'attachment; filename="{decoded_filename}"'}
     )
-
-
-# --- ROOT HEALTH CHECK ---
-@app.get("/")
-def root():
-    return {"status": "Student AI SPPU backend is running"}
 
 
 # --- SERVER STARTUP ---
