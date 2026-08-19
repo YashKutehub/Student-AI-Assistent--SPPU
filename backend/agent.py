@@ -49,7 +49,20 @@ agent = create_react_agent(get_groq_llm(TEXT_MODEL_NAME), TOOLS)
 
 
 def run_agent(question: str, history: str = ""):
-    messages = []
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an academic assistant for SPPU students. "
+                "For ANY question about syllabus, course content, concepts, "
+                "definitions, lab procedures, or exam topics, you MUST call the "
+                "search_syllabus_notes tool BEFORE answering. Do not answer such "
+                "questions from your own knowledge. Only skip tool use for greetings "
+                "or small talk. Use check_latest_sppu_notices only for questions about "
+                "dates, circulars, or recent announcements."
+            ),
+        }
+    ]
     if history:
         messages.append({"role": "system", "content": f"Conversation so far:\n{history}"})
     messages.append({"role": "user", "content": question})
