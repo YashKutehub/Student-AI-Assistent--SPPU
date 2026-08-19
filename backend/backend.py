@@ -75,7 +75,7 @@ def get_groq_llm(model_name):
 
     # Only gpt-oss models accept these — sending them to the vision model errors out.
     if is_reasoning_model:
-        kwargs["reasoning_effort"] = "low"     # tool routing + summarising: deep reasoning not needed
+        kwargs["reasoning_effort"] = "medium"     # tool routing + summarising: deep reasoning not needed
         kwargs["reasoning_format"] = "hidden"  # keeps chain-of-thought out of response.content
 
     try:
