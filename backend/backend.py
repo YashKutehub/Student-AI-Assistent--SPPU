@@ -41,8 +41,16 @@ def get_vectorstore():
     return Chroma(persist_directory=DB_PERSIST_DIRECTORY, embedding_function=get_embeddings())
 
 # --- 🚀 GROQ MODEL DEFINITIONS ---
-TEXT_MODEL_NAME = "llama-3.3-70b-versatile"         # 70b parameter text model
-VISION_MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct"  # Vision model
+# Migrated 19 Aug 2026 — Groq decommissioned the previous models:
+#   llama-3.3-70b-versatile                     -> shut down 16 Aug 2026
+#   meta-llama/llama-4-scout-17b-16e-instruct   -> shut down 17 Jul 2026
+TEXT_MODEL_NAME = "openai/gpt-oss-120b"   # MoE reasoning text model (text-only)
+VISION_MODEL_NAME = "qwen/qwen3.6-27b"    # multimodal model (NOTE: Groq serves this as PREVIEW)
+
+# Reasoning models spend tokens thinking before answering, so the ceiling has to
+# be high enough for reasoning + the actual answer, or replies come back truncated.
+TEXT_MAX_TOKENS = 2048
+VISION_MAX_TOKENS = 1024
 
 print("\n--- 🕵️‍♂️ INITIALIZING GROQ AI ENGINE ---")
 
@@ -56,12 +64,30 @@ else:
 @lru_cache(maxsize=4)
 def get_groq_llm(model_name):
     """Creates and reuses a Groq LLM instance for lower startup overhead."""
-    return ChatGroq(
-        model_name=model_name,
-        temperature=0.2,
-        max_tokens=700,
-        max_retries=1,
-    )
+    is_reasoning_model = model_name.startswith("openai/gpt-oss")
+
+    kwargs = {
+        "model": model_name,
+        "temperature": 0.2,
+        "max_tokens": TEXT_MAX_TOKENS if is_reasoning_model else VISION_MAX_TOKENS,
+        "max_retries": 1,
+    }
+
+    # Only gpt-oss models accept these — sending them to the vision model errors out.
+    if is_reasoning_model:
+        kwargs["reasoning_effort"] = "low"     # tool routing + summarising: deep reasoning not needed
+        kwargs["reasoning_format"] = "hidden"  # keeps chain-of-thought out of response.content
+
+    try:
+        return ChatGroq(**kwargs)
+    except TypeError:
+        # Older langchain-groq versions don't expose the reasoning params directly.
+        reasoning_kwargs = {
+            k: kwargs.pop(k) for k in ("reasoning_effort", "reasoning_format") if k in kwargs
+        }
+        if reasoning_kwargs:
+            kwargs["model_kwargs"] = reasoning_kwargs
+        return ChatGroq(**kwargs)
 
 # --- 🛠️ UTILS ---
 def encode_image(image_path):
@@ -185,7 +211,8 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
                   "If the user asks for a table, use a table. "
                   "If no format is specified, default to clear numbered points with bold key terms.\n"
             "5. **Technical precision:** Break down algorithms, data structures, and engineering logic systematically.\n"
-            "6. **Visual analysis:** If an image (diagram/paper) is provided, analyze it and connect it to the question.\n\n"
+            "6. **Visual analysis:** If an image (diagram/paper) is provided, analyze it and connect it to the question.\n"
+            "7. **Output only the final answer.** Do not show your internal reasoning or planning steps.\n\n"
             f"--- HISTORY ---\n{chat_history}\n\n"
             f"--- CONTEXT ---\n{context_text}"
         )
@@ -195,6 +222,7 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
             "You are a helpful SPPU AI Assistant. No specific study material was found for this question, "
             "so answer using general engineering knowledge. Begin your answer with this exact warning: "
             "'⚠️ *I could not find this specific topic in your provided study materials, but based on general knowledge:*'\n"
+            "Output only the final answer — do not show your internal reasoning or planning steps.\n"
             f"--- HISTORY ---\n{chat_history}"
         )
 
