@@ -12,19 +12,24 @@ requests
 beautifulsoup4
 
 # --- LANGCHAIN ECOSYSTEM ---
-# (Unpinned to allow pip to resolve the perfect compatible matrix)
-langchain
-langchain-core
-langchain-community
-langchain-huggingface
-langchain-text-splitters
-langchain-groq
+# Capped below 1.0 - LangChain 1.x moves the langchain_community imports used here.
+langchain>=0.3,<1.0
+langchain-core>=0.3,<1.0
+langchain-community>=0.3,<1.0
+langchain-huggingface>=0.1,<1.0
+langchain-text-splitters>=0.3,<1.0
+langchain-groq>=0.2,<1.0
+langgraph>=0.2,<1.0
 groq
+
+# --- HF HUB (startup PDF download) ---
+huggingface_hub>=0.23,<1.0
 
 # --- VOICE / TTS ENGINE ---
 edge-tts
 
 # --- VECTOR DATABASE & INGESTION ---
+torch
 sentence-transformers==2.6.1
 chromadb==0.4.24
 pypdf==4.2.0

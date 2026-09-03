@@ -53,6 +53,17 @@ vectorstore = get_vectorstore()
 print("--- DATABASE LOADED ---")
 
 
+@app.get("/health")
+def health():
+    try:
+        count = vectorstore._collection.count()
+    except Exception as e:
+        return {"chunks_in_db": -1, "error": str(e)}
+    return {"chunks_in_db": count, "db_path": DB_PERSIST_DIRECTORY}
+
+
+
+
 # --- CHAT ENDPOINT ---
 @app.post("/chat")
 async def chat_endpoint(

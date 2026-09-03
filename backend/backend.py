@@ -118,7 +118,11 @@ def encode_image(image_path):
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 #
-RERANK_CONFIDENCE_THRESHOLD = 0.0
+# bge-reranker-base returns a RAW LOGIT, not a probability. Relevant chunks
+# routinely score negative on paraphrased queries, so keep the top 4 always
+# and only bail when even the best hit is clearly unrelated.
+LOW_CONFIDENCE_FLOOR = -4.0
+TOP_K = 4
 
 
 def retrieve_context_with_sources(query, vectorstore):
@@ -142,10 +146,10 @@ def retrieve_context_with_sources(query, vectorstore):
         sorted_indices = np.argsort(scores)[::-1]
 
         #
-        top_indices = [int(i) for i in sorted_indices if scores[i] >= RERANK_CONFIDENCE_THRESHOLD][:4]
+        top_indices = [int(i) for i in sorted_indices[:TOP_K]]
 
         #
-        if not top_indices:
+        if not top_indices or scores[top_indices[0]] < LOW_CONFIDENCE_FLOOR:
             print("⚠️ No chunk passed the confidence threshold — falling back to general knowledge.")
             return "", []
 
