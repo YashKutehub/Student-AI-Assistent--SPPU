@@ -3,20 +3,29 @@ name: Sync to Hugging Face Space
 on:
   push:
     branches: [main]
-  workflow_dispatch:   # lets you trigger it manually from the Actions tab too
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout full history
+      - name: Checkout working tree only
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          lfs: false
 
-      - name: Push to HF Space
+      - name: Push clean single-commit tree to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          rm -rf .git
+          rm -f .gitattributes
+          git init
+          git config user.email "ci@github.actions"
+          git config user.name "GitHub Actions"
+          git add -A
+          git commit -m "Sync from GitHub ${GITHUB_SHA::7}"
+          git branch -M main
           git remote add space https://Yashkute:$HF_TOKEN@huggingface.co/spaces/Yashkute/SPPU-Student-AI-Assistent
           git push space main --force
