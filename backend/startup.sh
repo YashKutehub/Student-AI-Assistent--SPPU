@@ -3,20 +3,18 @@ set -e
 cd /app/backend
 
 if [ -d "chroma_db" ] && [ -n "$(ls -A chroma_db 2>/dev/null)" ]; then
-  echo "=== CHROMA_DB PRESENT - SKIPPING BUILD ==="
+  echo "=== CHROMA_DB PRESENT - SKIPPING DOWNLOAD ==="
 else
-  echo "=== NO CHROMA_DB - DOWNLOADING PDFs FROM HF DATASET ==="
+  echo "=== DOWNLOADING PREBUILT CHROMA DB FROM HF DATASET ==="
   python - <<'PY'
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="Yashkute/sppu-pdf-docs",
+    repo_id="Yashkute/sppu-chroma-db",
     repo_type="dataset",
-    local_dir="data",
+    local_dir="chroma_db",
 )
-print("PDFs downloaded.")
+print("Chroma DB downloaded.")
 PY
-  echo "=== BUILDING VECTOR DB (slow on CPU, be patient) ==="
-  python ingest.py
 fi
 
 echo "=== STARTING FASTAPI SERVER ==="
