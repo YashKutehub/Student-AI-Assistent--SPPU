@@ -6,6 +6,7 @@ import uuid
 import base64
 import sys
 from datetime import date
+from functools import lru_cache
 from scraper import scrape_latest_sppu_notice
 import subprocess
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import unquote
 from pydantic import BaseModel
+from huggingface_hub import HfApi, hf_hub_download
 from backend import DB_PERSIST_DIRECTORY, retrieve_context_with_sources, generate_llm_response, get_vectorstore
 from voice_agent import generate_tutor_audio
 from agent import run_agent
@@ -53,6 +55,39 @@ vectorstore = get_vectorstore()
 print("--- DATABASE LOADED ---")
 
 
+# --- PDF SOURCE RESOLUTION ---
+# The 218 source PDFs live in an HF dataset, not in the container. We resolve
+# local data/ first (so Live Sync scraped notices still work), then fall back
+# to downloading the single requested PDF from the dataset on demand.
+PDF_DATASET = "Yashkute/sppu-pdf-docs"
+
+
+@lru_cache(maxsize=1)
+def _pdf_index():
+    """Map basename -> path inside the dataset repo. Built once per container."""
+    files = HfApi().list_repo_files(PDF_DATASET, repo_type="dataset")
+    return {os.path.basename(f): f for f in files if f.lower().endswith(".pdf")}
+
+
+def resolve_pdf(decoded_filename: str):
+    """Return a local filesystem path for the PDF, or None if it doesn't exist."""
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    hits = glob.glob(
+        os.path.join(BASE_DIR, "data", "**", decoded_filename), recursive=True
+    )
+    if hits:
+        path = os.path.abspath(hits[0])
+        print(f"File found locally at: {path}")
+        return path
+
+    repo_path = _pdf_index().get(os.path.basename(decoded_filename))
+    if not repo_path:
+        return None
+
+    print(f"Fetching from HF dataset: {repo_path}")
+    return hf_hub_download(PDF_DATASET, repo_path, repo_type="dataset")
+
+
 @app.get("/health")
 def health():
     try:
@@ -60,8 +95,6 @@ def health():
     except Exception as e:
         return {"chunks_in_db": -1, "error": str(e)}
     return {"chunks_in_db": count, "db_path": DB_PERSIST_DIRECTORY}
-
-
 
 
 # --- CHAT ENDPOINT ---
@@ -184,42 +217,30 @@ async def sync_sppu_notices():
 @app.get("/view/{filename:path}")
 async def view_pdf(filename: str):
     decoded_filename = unquote(filename)
+    path = resolve_pdf(decoded_filename)
 
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    search_pattern = os.path.join(BASE_DIR, "data", "**", decoded_filename)
-    files = glob.glob(search_pattern, recursive=True)
+    if not path:
+        print(f"File NOT found: {decoded_filename}")
+        raise HTTPException(status_code=404, detail="File not found")
 
-    if files:
-        file_path = os.path.abspath(files[0])
-        print(f"File found at: {file_path}")
-        return FileResponse(file_path, media_type='application/pdf')
+    return FileResponse(path, media_type="application/pdf")
 
-    print(f"File NOT found: {decoded_filename}")
-    raise HTTPException(status_code=404, detail="File not found in any subfolders")
 
 # --- PDF DOWNLOAD ENDPOINT ---
 @app.get("/download/{filename:path}")
 async def download_file(filename: str):
     decoded_filename = urllib.parse.unquote(filename)
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    data_folder = os.path.join(BASE_DIR, "data")
-
     print(f"Download request: {decoded_filename}")
 
-    found_file_path = None
-    for root, dirs, files in os.walk(data_folder):
-        if decoded_filename in files:
-            found_file_path = os.path.join(root, decoded_filename)
-            break
+    path = resolve_pdf(decoded_filename)
 
-    if not found_file_path:
+    if not path:
         raise HTTPException(status_code=404, detail="File not found")
 
-    print(f"File found at: {found_file_path}")
     return FileResponse(
-        path=found_file_path,
+        path=path,
         filename=decoded_filename,
-        media_type='application/pdf',
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{decoded_filename}"'}
     )
 
