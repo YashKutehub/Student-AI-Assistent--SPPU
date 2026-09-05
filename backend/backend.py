@@ -18,19 +18,18 @@ DB_PERSIST_DIRECTORY = "./chroma_db"
 print("🧠 Loading Embedding + Reranker engines...")
 
 
-
 @lru_cache(maxsize=1)
 def get_embeddings():
     return HuggingFaceEmbeddings(
         model_name="BAAI/bge-base-en-v1.5",
-        model_kwargs={"device": "cpu"},        
+        model_kwargs={"device": "cpu"},
         encode_kwargs={
             "normalize_embeddings": True,
-            "batch_size": 32,                   
+            "batch_size": 32,
         },
     )
 
-# 
+
 @lru_cache(maxsize=1)
 def get_reranker():
     return CrossEncoder('BAAI/bge-reranker-base')
@@ -39,6 +38,7 @@ def get_reranker():
 @lru_cache(maxsize=1)
 def get_vectorstore():
     return Chroma(persist_directory=DB_PERSIST_DIRECTORY, embedding_function=get_embeddings())
+
 
 # --- 🚀 GROQ MODEL DEFINITIONS ---
 # Migrated 19 Aug 2026 — Groq decommissioned the previous models:
@@ -49,7 +49,9 @@ VISION_MODEL_NAME = "qwen/qwen3.6-27b"    # multimodal model (NOTE: Groq serves 
 
 # Reasoning models spend tokens thinking before answering, so the ceiling has to
 # be high enough for reasoning + the actual answer, or replies come back truncated.
-TEXT_MAX_TOKENS = 2048
+# Groq reserves max_tokens against the per-minute budget, so this is also half of
+# the 429 equation — do not raise it without checking the TPM headroom.
+TEXT_MAX_TOKENS = 1600
 VISION_MAX_TOKENS = 1024
 
 print("\n--- 🕵️‍♂️ INITIALIZING GROQ AI ENGINE ---")
@@ -70,13 +72,16 @@ def get_groq_llm(model_name):
         "model": model_name,
         "temperature": 0.2,
         "max_tokens": TEXT_MAX_TOKENS if is_reasoning_model else VISION_MAX_TOKENS,
-        "max_retries": 1,
+        # Groq's free tier is 8000 TPM. A burst of questions will legitimately
+        # hit 429; langchain retries those with exponential backoff, so the user
+        # sees a slower answer instead of an error.
+        "max_retries": 5,
     }
 
     # Only gpt-oss models accept these — sending them to the vision model errors out.
     if is_reasoning_model:
-        kwargs["reasoning_effort"] = "medium"     # tool routing + summarising: deep reasoning not needed
-        kwargs["reasoning_format"] = "hidden"  # keeps chain-of-thought out of response.content
+        kwargs["reasoning_effort"] = "medium"   # tool routing + summarising: deep reasoning not needed
+        kwargs["reasoning_format"] = "hidden"   # keeps chain-of-thought out of response.content
 
     try:
         return ChatGroq(**kwargs)
@@ -88,6 +93,7 @@ def get_groq_llm(model_name):
         if reasoning_kwargs:
             kwargs["model_kwargs"] = reasoning_kwargs
         return ChatGroq(**kwargs)
+
 
 # --- 🛠️ UTILS ---
 def encode_image(image_path):
@@ -114,48 +120,46 @@ def encode_image(image_path):
         return None
 
 
-#
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
-#
 # bge-reranker-base returns a RAW LOGIT, not a probability. Relevant chunks
-# routinely score negative on paraphrased queries, so keep the top 4 always
+# routinely score negative on paraphrased queries, so keep the top hits always
 # and only bail when even the best hit is clearly unrelated.
 LOW_CONFIDENCE_FLOOR = -4.0
-TOP_K = 4
+TOP_K = 3
+
+# --- TOKEN BUDGET ---
+# Groq free tier = 8000 tokens/minute, and max_tokens is reserved against it.
+# Roughly 4 chars per token, so these two caps keep a request near ~3.5k total
+# and leave room for a second question inside the same minute.
+MAX_CHARS_PER_CHUNK = 1100
+MAX_HISTORY_CHARS = 1500
 
 
 def retrieve_context_with_sources(query, vectorstore):
     """Stage 1: Fast candidate retrieval. Stage 2: Cross-encoder reranking for precision."""
     try:
-        
         search_query = BGE_QUERY_PREFIX + query
 
-       
         retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
         initial_docs = retriever.invoke(search_query)
         if not initial_docs:
             return "", []
 
-        
-      
         reranker = get_reranker()
         sentence_pairs = [[query, doc.page_content] for doc in initial_docs]
         scores = np.asarray(reranker.predict(sentence_pairs), dtype=np.float32)
 
         sorted_indices = np.argsort(scores)[::-1]
 
-        #
         top_indices = [int(i) for i in sorted_indices[:TOP_K]]
 
-        #
         if not top_indices or scores[top_indices[0]] < LOW_CONFIDENCE_FLOOR:
             print("⚠️ No chunk passed the confidence threshold — falling back to general knowledge.")
             return "", []
 
         top_k_docs = [initial_docs[i] for i in top_indices]
 
-        # 
         print("🔎 Retrieved chunks (reranked):")
         for i in top_indices:
             src = os.path.basename(initial_docs[i].metadata.get('source', 'Unknown'))
@@ -166,10 +170,14 @@ def retrieve_context_with_sources(query, vectorstore):
         for d in top_k_docs:
             name = os.path.basename(d.metadata.get('source', 'Unknown'))
             page = d.metadata.get('page', 0) + 1
-            formatted_text += f"--- FROM: {name} (Page {page}) ---\n{d.page_content}\n\n"
+            body = d.page_content[:MAX_CHARS_PER_CHUNK]
+            formatted_text += f"--- FROM: {name} (Page {page}) ---\n{body}\n\n"
             sources_with_pages.append(f"{name} [Pg. {page}]")
 
         unique_sources = list(dict.fromkeys(sources_with_pages))
+
+        approx_tokens = len(formatted_text) // 4
+        print(f"📦 Context size: {len(formatted_text)} chars (~{approx_tokens} tokens)")
 
         return formatted_text, unique_sources
 
@@ -194,9 +202,13 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
     if any(query_lower.startswith(g) for g in common_greetings) and len(query.split()) < 4:
         use_rag = False
 
+    # Keep only the tail of the conversation — older turns are the cheapest
+    # thing to drop when staying inside the per-minute token budget.
+    if chat_history and len(chat_history) > MAX_HISTORY_CHARS:
+        chat_history = "...(earlier turns trimmed)...\n" + chat_history[-MAX_HISTORY_CHARS:]
+
     # 3. Apply the Specialized SPPU System Prompt
     if use_rag and context_text:
-       
         system_text = (
             "You are an elite Academic AI Assistant for SPPU engineering students. "
             "Your job is rigorous exam prep: simplify complex concepts and explain logic step-by-step.\n\n"
@@ -210,10 +222,10 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
             "response with this exact warning: '⚠️ *I could not find this specific topic in your provided study "
             "materials, but based on general knowledge:*' and then answer.\n"
             "4. **Study formatting:** STRICTLY follow the user's requested format. "
-                  "If the user asks for 7-8 points, give exactly 7-8 points. "
-                  "If the user asks for a brief answer, be concise. "
-                  "If the user asks for a table, use a table. "
-                  "If no format is specified, default to clear numbered points with bold key terms.\n"
+            "If the user asks for 7-8 points, give exactly 7-8 points. "
+            "If the user asks for a brief answer, be concise. "
+            "If the user asks for a table, use a table. "
+            "If no format is specified, default to clear numbered points with bold key terms.\n"
             "5. **Technical precision:** Break down algorithms, data structures, and engineering logic systematically.\n"
             "6. **Visual analysis:** If an image (diagram/paper) is provided, analyze it and connect it to the question.\n"
             "7. **Output only the final answer.** Do not show your internal reasoning or planning steps.\n\n"
@@ -221,7 +233,6 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
             f"--- CONTEXT ---\n{context_text}"
         )
     else:
-        
         system_text = (
             "You are a helpful SPPU AI Assistant. No specific study material was found for this question, "
             "so answer using general engineering knowledge. Begin your answer with this exact warning: "
@@ -252,4 +263,9 @@ def generate_llm_response(query, context_text, chat_history, image_path, use_rag
         return response.content
     except Exception as e:
         print(f"❌ Groq Error: {e}")
+        if "rate_limit" in str(e).lower() or "429" in str(e):
+            return (
+                "⏳ The free-tier request limit was hit. Please wait about a minute "
+                "and ask again."
+            )
         return "I encountered an error while processing that request. Please try again."

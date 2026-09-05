@@ -1,80 +1,74 @@
 import os
+import re
 import sys
 import subprocess
-from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
-from backend import get_groq_llm, get_vectorstore, retrieve_context_with_sources, TEXT_MODEL_NAME
+
+from backend import (
+    get_vectorstore,
+    retrieve_context_with_sources,
+    generate_llm_response,
+)
 from scraper import scrape_latest_sppu_notice
 
 
-@tool
-def search_syllabus_notes(query: str) -> str:
-    """
-    Search SPPU syllabus PDFs, lab manuals and notes using vector search
-    + cross-encoder reranking. Use for any question about course content,
-    concepts, definitions, or lab procedures.
-    """
-    vectorstore = get_vectorstore()
-    context, sources = retrieve_context_with_sources(query, vectorstore)
-    if not context:
-        return "No relevant content found in the syllabus notes."
-    return context + "\n\nSources: " + ", ".join(sources)
+# Questions that genuinely need a live scrape of the SPPU circulars page.
+# Everything else goes straight to vector retrieval.
+NOTICE_PATTERNS = re.compile(
+    r"\b(notice|circular|announcement|exam\s*date|time\s*table|timetable|"
+    r"result\s*date|latest|recent|new\s+update|deadline)\b",
+    re.IGNORECASE,
+)
 
 
-@tool
 def check_latest_sppu_notices() -> str:
-    """
-    Scrapes the official SPPU circulars website for new notices and indexes
-    them. Use ONLY when the question is time-sensitive - new exam dates,
-    latest circulars, recent announcements - NOT for regular syllabus questions.
-    """
+    """Scrape the official SPPU circulars page and index anything new."""
     success, message = scrape_latest_sppu_notice()
     if not success:
         return f"Could not check for new notices: {message}"
 
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     result = subprocess.run(
-        [sys.executable, "ingest.py"], cwd=backend_dir,
-        capture_output=True, text=True, encoding="utf-8",
+        [sys.executable, "ingest.py"],
+        cwd=backend_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
-        return f"Found notices but failed to index them: {result.stderr[-500:]}"
+        return f"Found notices but failed to index them: {(result.stderr or '')[-500:]}"
 
     get_vectorstore.cache_clear()
     return message
 
 
-TOOLS = [search_syllabus_notes, check_latest_sppu_notices]
-agent = create_react_agent(get_groq_llm(TEXT_MODEL_NAME), TOOLS)
-
-
 def run_agent(question: str, history: str = ""):
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an academic assistant for SPPU students. "
-                "For ANY question about syllabus, course content, concepts, "
-                "definitions, lab procedures, or exam topics, you MUST call the "
-                "search_syllabus_notes tool BEFORE answering. Do not answer such "
-                "questions from your own knowledge. Only skip tool use for greetings "
-                "or small talk. Use check_latest_sppu_notices only for questions about "
-                "dates, circulars, or recent announcements."
-            ),
-        }
-    ]
-    if history:
-        messages.append({"role": "system", "content": f"Conversation so far:\n{history}"})
-    messages.append({"role": "user", "content": question})
+    """
+    Deterministic RAG pipeline.
 
-    result = agent.invoke({"messages": messages})
-    answer = result["messages"][-1].content
+    The previous implementation used a LangGraph ReAct agent. That cost three
+    LLM round-trips per question (decide -> tool -> answer) and re-sent the full
+    retrieved context on every hop, which blew past Groq's free-tier 8000 TPM
+    limit. Retrieval is mandatory for every syllabus question here, so there is
+    nothing for the model to decide: retrieve once, answer once.
+    """
+    notice_prefix = ""
 
-    tool_calls = [m.name for m in result["messages"] if getattr(m, "name", None)]
-    print(f"🤖 Tools called: {tool_calls or 'none — answered directly'}")
+    if NOTICE_PATTERNS.search(question):
+        print("Time-sensitive question detected — checking SPPU circulars...")
+        notice_prefix = check_latest_sppu_notices()
 
-    sources = []
-    for m in result["messages"]:
-        if getattr(m, "name", None) == "search_syllabus_notes" and "Sources:" in m.content:
-            sources = m.content.split("Sources:")[-1].strip().split(", ")
+    context, sources = retrieve_context_with_sources(question, get_vectorstore())
+
+    if notice_prefix:
+        context = f"--- LATEST NOTICE CHECK ---\n{notice_prefix}\n\n{context}"
+
+    answer = generate_llm_response(
+        query=question,
+        context_text=context,
+        chat_history=history,
+        image_path=None,
+        use_rag=bool(context),
+    )
+
+    print(f"Sources returned: {sources or 'none'}")
     return answer, sources
