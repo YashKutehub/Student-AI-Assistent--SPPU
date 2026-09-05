@@ -7,127 +7,156 @@ sdk: docker
 pinned: false
 ---
 
-
-```markdown
 # 🎓 SPPU Student AI Assistant
 
-An advanced, full-stack AI tutor specifically designed for Savitribai Phule Pune University (SPPU) engineering students. It uses a **Two-Stage RAG (Retrieval-Augmented Generation)** architecture to answer syllabus questions, read PDF notes, and provide perfectly cited answers. 
+**[▶ Live Demo](https://student-ai-assistent-sppu.vercel.app)** · Agentic RAG · LangGraph · ChromaDB · FastAPI · React
 
-Built as a final-year engineering Major Project, it features human-like text-to-speech audio, an interactive React frontend, and a Live Sync web scraper to automatically fetch the latest university circulars.
+![Python](https://img.shields.io/badge/Python-3.10-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.129-009688)
+![LangGraph](https://img.shields.io/badge/LangGraph-ReAct_Agent-orange)
+![React](https://img.shields.io/badge/React-Vite-61DAFB)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+An **agentic RAG** study assistant for Savitribai Phule Pune University (SPPU) engineering students. It decides for itself when to search the syllabus corpus, retrieves with a two-stage vector-search + cross-encoder pipeline, and returns answers with a clickable link to the exact source PDF and page number.
+
+Built as a final-year engineering Major Project. Includes neural text-to-speech, a React chat interface, and a live scraper that pulls the newest university circulars into the knowledge base on demand.
+
+---
+
+## 🧠 How It Works
+
+The core is a **LangGraph ReAct agent** (`backend/agent.py`) that autonomously routes each question to one of two tools:
+
+| Tool | When the agent picks it |
+|---|---|
+| `search_syllabus_notes` | Any syllabus, concept, definition, or lab-procedure question |
+| `check_latest_sppu_notices` | Time-sensitive queries — exam dates, new circulars, announcements |
+
+Retrieval runs in two stages:
+
+1. **Recall** — `BAAI/bge-base-en-v1.5` embeddings pull the top 20 candidate chunks from ChromaDB.
+2. **Precision** — a `BAAI/bge-reranker-base` cross-encoder rescores all 20 and keeps the best 4.
+
+The reranked chunks carry their filename and page number as metadata, which is what powers the per-answer source citations. Generation runs on Groq's `openai/gpt-oss-120b`, with `qwen/qwen3.6-27b` handling image questions (diagrams, question papers).
+
+**Why an agent instead of a fixed RAG chain:** a fixed chain retrieves on every single query, including "hi". The agent skips retrieval for small talk and triggers the live scraper on its own when a question is about dates — no manual button needed.
 
 ---
 
 ## ✨ Features
-* **Textbook-Accurate RAG:** Uses ChromaDB and Cross-Encoder reranking to find exact answers from SPPU syllabus PDFs and Lab Manuals, immune to the "Lexical Keyword" blindspot via physical metadata injection.
-* **On-Demand Audio Tutor:** Listen to answers via ultra-realistic Microsoft Azure Neural voices (Edge-TTS) with lazy-loading binary `Blob` streams to completely eliminate browser memory crashes.
-* **Live Circular Sync:** Built-in BeautifulSoup web scraper that safely fetches the newest notices directly from the official SPPU website and tags them temporally (`LATEST_NOTICE_`) for immediate AI recognition.
-* **Secure Architecture:** Fully stateless-ready frontend and backend, with strict `.env` isolation for API keys.
+
+* **Cited answers.** Every RAG answer renders source chips underneath linking to the exact PDF and page, so nothing has to be taken on trust.
+* **Two-stage retrieval.** Bi-encoder recall plus cross-encoder reranking, with filename injection into chunk text to survive the lexical-keyword blindspot.
+* **Autonomous tool routing.** LangGraph ReAct loop chooses retrieval, live scraping, or a direct reply per query.
+* **On-demand audio tutor.** Microsoft Azure Neural voices via Edge-TTS, streamed as lazy-loaded binary blobs to avoid browser memory pressure.
+* **Live circular sync.** BeautifulSoup scraper fetches the newest SPPU notices, tags them temporally (`LATEST_NOTICE_`), and re-indexes them into the vector store.
+* **Vision mode.** Upload a diagram or past question paper and ask about it directly.
 
 ---
 
-## 🛠️ Prerequisites
-Before you begin, ensure you have the following installed on your machine:
-1. **Python 3.10 ([Download Here](https://www.python.org/downloads/))
-2. **Node.js (v18+) and npm** ([Download Here](https://nodejs.org/))
-3. **A Free Groq API Key** (Get one at [console.groq.com](https://console.groq.com))
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Agent orchestration | LangGraph (ReAct), LangChain |
+| LLM inference | Groq — `openai/gpt-oss-120b`, `qwen/qwen3.6-27b` |
+| Embeddings | `BAAI/bge-base-en-v1.5` |
+| Reranker | `BAAI/bge-reranker-base` (cross-encoder) |
+| Vector store | ChromaDB |
+| Backend | FastAPI, Uvicorn |
+| Frontend | React, Vite, Tailwind CSS, Framer Motion |
+| TTS | Edge-TTS (Azure Neural voices) |
+| Deployment | Hugging Face Spaces (Docker) + Vercel |
 
 ---
 
-## 🚀 Installation & Setup Guide
+## 🚀 Local Setup
 
-Follow these steps carefully to get both the backend and frontend running on your local development environment.
+### Prerequisites
+1. Python 3.10 — [download](https://www.python.org/downloads/)
+2. Node.js v18+ and npm — [download](https://nodejs.org/)
+3. A free Groq API key — [console.groq.com](https://console.groq.com)
 
-### Step 1: Clone the Repository
-Open your terminal or command prompt and run:
+### Step 1 — Clone
+
+```bash
 git clone https://github.com/YashKutehub/Student-AI-Assistent--SPPU.git
 cd Student-AI-Assistent--SPPU
 ```
 
-### Step 2: Set Up the Python Backend
-You need to create an isolated environment so the project dependencies don't interfere with your system Python.
+### Step 2 — Backend
 
-**1. Navigate to the backend folder:**
 ```bash
 cd backend
+python -m venv .venv
 ```
 
-**2. Create a Virtual Environment:**
-* **Windows:**
-  ```cmd
-  python -m venv .venv
-  ```
-* **macOS (Intel/Apple Silicon) & Linux:**
-  ```bash
-  python3 -m venv .venv
-  ```
+Activate it:
 
-**3. Activate the Virtual Environment:**
-* **Windows:**
-  ```cmd
-  .venv\Scripts\activate
-  ```
-* **macOS & Linux:**
-  ```bash
-  source .venv/bin/activate
-  ```
-*(You should now see `(.venv)` at the start of your terminal line).*
+```bash
+# Windows
+.venv\Scripts\activate
 
-**4. Install Dependencies:**
+# macOS / Linux
+source .venv/bin/activate
+```
+
+Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-**5. Configure Environment Variables:**
-Create a file exactly named `.env` inside the `backend` folder and paste your Groq API key and preferred Voice ID:
-```env
-# Your free Groq API Key
-GROQ_API_KEY=your_actual_api_key_here
+Create a `.env` file inside `backend/`:
 
-# Premium Azure Neural Voice ID (e.g., en-US-JennyNeural, en-US-AriaNeural, en-GB-SoniaNeural)
-TTS_VOICE_ID=en-US-JennyNeural
+```env
+GROQ_API_KEY=your_actual_api_key_here
+TTS_VOICE_ID=en-US-AriaNeural
 ```
 
-**6. Start the FastAPI Server:**
+Start the server:
+
 ```bash
 uvicorn api:app --reload
 ```
-*(Leave this terminal window open and running in the background).*
 
----
+Leave this terminal running.
 
-### Step 3: Set Up the React Frontend
-Open a **new, separate terminal window** and navigate to your project folder.
+### Step 3 — Frontend
 
-**1. Navigate to the frontend folder:**
+In a **new terminal**:
+
 ```bash
 cd frontend
-```
-
-**2. Install Node Dependencies:**
-```bash
 npm install
-```
-
-**3. Start the Development Server:**
-```bash
 npm run dev
 ```
-Your app will automatically open in your default web browser, typically at `http://localhost:5173`.
 
----
+Opens at `http://localhost:5173`.
 
-### Step 4: Initialize the AI Memory (RAG Database)
-Right now, the AI's ChromaDB instance is empty. You need to feed it SPPU documents to activate the RAG pipeline.
+### Step 4 — Build the vector database
 
-1. Drop your SPPU syllabus, notes, or lab manual PDFs into the `backend/data/` folder.
-2. Open a terminal, activate your backend `.venv`, and run the ingestion script:
-   ```bash
-   cd backend
-   python ingest.py
-   ```
-3. Wait for the terminal to finish splitting, injecting metadata, and embedding the text into `chroma_db`. 
+The assistant has no knowledge until you feed it documents.
 
-**Alternatively (Live Sync):** Open the React frontend and click the green **"Live Sync"** button in the header. The app will automatically scrape the SPPU SharePoint website for the newest circulars, download them into the `data/` folder, and update the AI's memory in real-time.
+1. Drop SPPU syllabus PDFs, notes, or lab manuals into `backend/data/`.
+2. With the backend venv active, run the ingestion script:
+
+```bash
+cd backend
+python ingest.py
+```
+
+The script auto-detects CUDA and falls back to CPU. It skips already-processed files, so re-running it only indexes what's new.
+
+**Verify it worked** — hit the health endpoint:
+
+```bash
+curl http://localhost:8000/health
+```
+
+A non-zero `chunks_in_db` means retrieval is live. A zero means the database is empty and the assistant will fall back to general knowledge.
+
+**Alternative:** click **Live Sync** in the frontend header to scrape and index the latest SPPU circulars automatically.
 
 ---
 
@@ -136,27 +165,48 @@ Right now, the AI's ChromaDB instance is empty. You need to feed it SPPU documen
 ```text
 SPPU-AI-ASSISTANT/
 │
-├── backend/                  # Python API & AI Logic
-│   ├── api.py                # FastAPI endpoints (/chat, /speak, /sync-notices)
-│   ├── backend.py            # LangChain Groq routing & Cross-Encoder setup
-│   ├── ingest.py             # PDF chunking, metadata injection & Vector DB initialization
-│   ├── scraper.py            # BeautifulSoup SPPU targeted multi-board web scraper
-│   ├── voice_agent.py        # Edge-TTS audio generation stream
-│   ├── requirements.txt      # Pinned Python dependencies
-│   ├── .env                  # Hidden API keys (DO NOT COMMIT)
-│   ├── data/                 # Raw PDF storage (Ignored by Git)
-│   └── chroma_db/            # Local vector database (Ignored by Git)
+├── backend/                  # Python API & AI logic
+│   ├── api.py                # FastAPI endpoints (/chat, /speak, /sync-notices, /health)
+│   ├── agent.py              # LangGraph ReAct agent + tool definitions
+│   ├── backend.py            # Groq routing, embeddings, cross-encoder reranking
+│   ├── ingest.py             # PDF chunking, metadata injection, vector DB build
+│   ├── scraper.py            # BeautifulSoup SPPU multi-board circular scraper
+│   ├── voice_agent.py        # Edge-TTS audio stream generation
+│   ├── startup.sh            # Container entrypoint: builds DB, then serves
+│   ├── requirements.txt      # Python dependencies
+│   ├── .env                  # API keys (gitignored)
+│   ├── data/                 # Raw PDF storage (gitignored)
+│   └── chroma_db/            # Vector database (gitignored)
 │
-└── frontend/                 # React UI
-    ├── src/
-    │   ├── App.jsx           # Main chat interface & Blob audio player logic
-    │   └── main.jsx          # React entry point
-    └── package.json          # Node dependencies
+├── frontend/                 # React UI
+│   ├── src/
+│   │   ├── App.jsx           # Chat interface, source chips, blob audio player
+│   │   └── main.jsx          # React entry point
+│   └── package.json
+│
+├── .github/workflows/
+│   └── sync-to-hf.yml        # CD: pushes a clean tree to the HF Space on merge
+└── Dockerfile                # HF Spaces container definition
 ```
+
+---
 
 ## 🐛 Troubleshooting
 
-* **Frontend says "Backend is unreachable":** Ensure your Python FastAPI server is running on port 8000. If it started on a different port, update the `API_URL` variable in `App.jsx`.
-* **The AI is hallucinating or missing documents:** If you delete files from the `data/` folder, you must also manually delete the entire `chroma_db` folder and re-run `python ingest.py` to hard-reset the memory. Standard vector databases do not auto-delete removed documents.
-* **Audio isn't playing:** Check the backend terminal. Ensure your computer has internet access, as Edge-TTS requires a live connection to Microsoft Azure servers. Verify your `.env` file is loaded correctly.
-```
+**Answers come back with no source citations.**
+Check `/health`. If `chunks_in_db` is `0`, the vector database is empty and the agent is falling back to general knowledge. Run `python ingest.py`.
+
+**Frontend says "Backend is unreachable".**
+Confirm FastAPI is on port 8000. If it bound elsewhere, update `VITE_API_URL` in your frontend `.env`.
+
+**Deleted PDFs still show up in answers.**
+Vector stores don't auto-remove deleted documents. Delete the whole `chroma_db/` folder and re-run `python ingest.py` for a hard reset.
+
+**Audio isn't playing.**
+Edge-TTS needs a live connection to Microsoft's servers. Check network access and that `.env` loaded correctly.
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
